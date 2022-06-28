@@ -8,5 +8,6 @@ COPY package.json /usr/src/app/
 RUN npm install --unsafe-perm && npm cache clean --force
 COPY . /usr/src/app
 RUN rm -rf .env && touch .env
+RUN npm run generate-api-doc
 
 CMD ["npm", "start"]
