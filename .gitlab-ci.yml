@@ -1,56 +1,131 @@
+---
 image: docker:latest
 
 variables:
   PIPELINE_IMAGE: $CI_REGISTRY_IMAGE:$CI_PIPELINE_ID
   DEV_IMAGE: $CI_REGISTRY_IMAGE:dev
-  MASTER_IMAGE: $CI_REGISTRY_IMAGE:master
+  MAIN_IMAGE: $CI_REGISTRY_IMAGE:main
 
 stages:
   - build
+  - test
+  - release
   - deploy
+  - documentation
 
-build:
+build_dev:
   stage: build
   services:
     - docker:dind
   except:
-    - dev
-    - master
+    - main
   script:
     - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
     - docker pull $DEV_IMAGE || true
     - docker build --cache-from $DEV_IMAGE -t $PIPELINE_IMAGE .
+    - docker push $PIPELINE_IMAGE
 
-build_release_dev:
+build_main:
   stage: build
+  services:
+    - docker:dind
+  only:
+    - main
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $MAIN_IMAGE || true
+    - docker build --cache-from $MAIN_IMAGE -t $PIPELINE_IMAGE .
+    - docker push $PIPELINE_IMAGE
+
+
+test_eslint:
+  stage: test
+  services:
+    - docker:dind
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $PIPELINE_IMAGE
+    - docker run --name=$CI_PIPELINE_ID $PIPELINE_IMAGE npm run test-lint
+
+test_mocha:
+  stage: test
+  services:
+    - docker:dind
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $PIPELINE_IMAGE
+    - docker run --name=database -d mongo:4.4.0
+    - docker run --name=$CI_PIPELINE_ID --link=database:database --env-file .env.test $PIPELINE_IMAGE npm run test-mocha-with-coverage
+
+release_dev:
+  stage: release
   services:
     - docker:dind
   only:
     - dev
   script:
     - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
-    - docker pull $DEV_IMAGE || true
-    - docker build --cache-from $DEV_IMAGE -t $DEV_IMAGE .
+    - docker pull $PIPELINE_IMAGE
+    - docker tag $PIPELINE_IMAGE $DEV_IMAGE
     - docker push $DEV_IMAGE
 
-build_release_master:
-  stage: build
+release_main:
+  stage: release
   services:
     - docker:dind
   only:
-    - master
+    - main
   script:
     - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
-    - docker pull $MASTER_IMAGE || true
-    - docker build --cache-from $MASTER_IMAGE -t $MASTER_IMAGE .
-    - docker push $MASTER_IMAGE
+    - docker pull $PIPELINE_IMAGE
+    - docker tag $PIPELINE_IMAGE $MAIN_IMAGE
+    - docker push $MAIN_IMAGE
+
+release_production_version:
+  stage: release
+  services:
+    - docker:dind
+  only:
+    - main
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $PIPELINE_IMAGE
+    - VERSION_TAG=`cat version.txt`
+    - docker tag $PIPELINE_IMAGE $CI_REGISTRY_IMAGE:$VERSION_TAG
+    - docker push $CI_REGISTRY_IMAGE:$VERSION_TAG
 
 deploy_dev:
   stage: deploy
-  services:
-    - docker:dind
   only:
     - dev
   script:
     - apk add --update curl curl-dev
-    - curl -X POST -F token=$DEPLOY_TRIGGER_TOKEN -F ref=dev https://git.grava.digital/api/v4/projects/834/trigger/pipeline
+    - curl -X POST -F token=$DEPLOY_TRIGGER_TOKEN -F ref=dev https://git.grava.digital/api/v4/projects/811/trigger/pipeline
+
+documentation_dev:
+  stage: documentation
+  services:
+    - docker:dind
+  only:
+    - dev
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $DEV_IMAGE
+    - (docker run --name=$CI_PIPELINE_ID $DEV_IMAGE cat /usr/src/app/doc.md) > /root/doc.md
+    - apk add --update curl curl-dev
+    - curl -i -X POST -H "Content-Type:multipart/form-data" -F "name=buebio-dev" -F "file=@/root/doc.md" $DOCUMENTATION_API_UPLOAD_ROUTE
+
+documentation_main:
+  stage: documentation
+  services:
+    - docker:dind
+  only:
+    - main
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN $CI_REGISTRY
+    - docker pull $MAIN_IMAGE
+    - (docker run --name=$CI_PIPELINE_ID $MAIN_IMAGE cat /usr/src/app/doc.md) > /root/doc.md
+    - apk add --update curl curl-dev
+    - VERSION_TAG=`cat version.txt`
+    - curl -i -X POST -H "Content-Type:multipart/form-data" -F "name=buebio" -F "file=@/root/doc.md" $DOCUMENTATION_API_UPLOAD_ROUTE
+    - curl -i -X POST -H "Content-Type:multipart/form-data" -F "name=buebio-$VERSION_TAG" -F "file=@/root/doc.md" $DOCUMENTATION_API_UPLOAD_ROUTE

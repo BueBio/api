@@ -1,12 +1,21 @@
 'use strict';
-
 const path = require('path');
 const envPath = path.join(__dirname, '/../../.env.test');
 require('dotenv').config({path: envPath});
 require('module-alias/register');
-const logger = require('@logger');
 const mongoose = require('mongoose');
-const app = require('../../app');
+const logger = require('@logger');
+
+const mockery = require('mockery');
+mockery.enable({warnOnUnregistered: false});
+const ethersMock = require('./blockchain/ethers');
+mockery.registerMock('ethers', ethersMock);
+
+const proxyquire =  require('proxyquire').noCallThru();
+const eventsListenersMock =  require('./events-listeners-mock');
+const app = proxyquire('@root/app', {
+    '@utils/events-listeners': eventsListenersMock
+});
 
 function connectMongoose() {
     return new Promise((resolve, reject) => {
@@ -29,11 +38,16 @@ function connectMongoose() {
 function start() {
     return connectMongoose()
         .then(() => {
+            return app.beforeInit();
+        })
+        .then(() => {
             return app.initialize();
         });
 }
 
 function finish() {
+    mockery.deregisterAll();
+    mockery.disable();
     return mongoose.connection.close();
 }
 

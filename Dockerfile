@@ -1,4 +1,4 @@
-FROM node:14.18-alpine
+FROM node:16.16-alpine
 
 RUN apk add --update git && rm -rf /tmp/* /var/cache/apk/*
 RUN npm config set registry http://registry.npmjs.org && npm cache clean --force

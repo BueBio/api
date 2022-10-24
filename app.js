@@ -1,13 +1,19 @@
 'use strict';
 const express = require('express');
 const path = require('path');
-const logger = require('@lib/logger');
+const logger = require('@logger');
 const cookieParser = require('cookie-parser');
 const bodyParser = require('body-parser');
 const routes = require('@lib/routes');
 const expressWinston = require('express-winston');
 const app = express();
 const cors = require('cors');
+const publicPaths = require('./config/public-paths');
+const extractJwt = require('@utils/extract-jwt');
+const scheduleRunner = require('@utils/schedule-runner');
+const createDefaultAdmin = require('@utils/create-default-admin');
+const {initialize: initializeBlockchain} = require('@utils/blockchain');
+require('@utils/events-listeners');
 
 function connectMongoose() {
     const mongoose = require('mongoose');
@@ -28,7 +34,11 @@ function initialize() {
     app.use(bodyParser.urlencoded({extended: false}));
     app.use(cookieParser());
     app.use('/public', express.static(path.join(__dirname, 'public')));
-    
+
+    app.get(publicPaths.regex('get'), extractJwt);
+    app.put(publicPaths.regex('put'), extractJwt);
+    app.post(publicPaths.regex('post'), extractJwt);
+    app.delete(publicPaths.regex('delete'), extractJwt);
     Object.keys(routes).forEach((key) => {
         app.use('/api', routes[key]);
     });
@@ -42,7 +52,6 @@ function initialize() {
     });
 
     app.use(function(err, req, res, next) {
-        logger.error('handleError: ', err);
         if (res.headersSent) {
             return next(err);
         }
@@ -60,7 +69,18 @@ function initialize() {
     return app;
 }
 
+async function beforeInit() {
+    await initializeBlockchain();
+}
+
+async function afterInit() {
+    scheduleRunner();
+    createDefaultAdmin();
+}
+
 module.exports = {
     initialize,
-    connectMongoose
+    connectMongoose,
+    beforeInit,
+    afterInit
 };
